@@ -1,0 +1,1 @@
+常用中间件的statefulset实现

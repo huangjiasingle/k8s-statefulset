@@ -1,0 +1,295 @@
+# Headless service for stable DNS entries of StatefulSet members.
+apiVersion: v1
+kind: Service
+metadata:
+  name: mariadb
+  labels:
+    app: mariadb
+spec:
+  ports:
+  - name: mariadb
+    port: 3306
+  clusterIP: None
+  selector:
+    app: mariadb
+---
+# Client service for connecting to any MySQL instance for reads.
+# For writes, you must instead connect to the master: mysql-0.mysql.
+apiVersion: v1
+kind: Service
+metadata:
+  name: mariadb-read
+  labels:
+    app: mariadb
+spec:
+  ports:
+  - name: mariadb
+    port: 3306
+  selector:
+    app: mariadb
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  labels:
+    app: mariadb
+  name: mariadb
+  namespace: mysql-operator
+data:
+  master.cnf: |
+    # Apply this config only on the master.
+    [mysqld]
+    log_bin=log-bin             #启动二进制日志并指定文件名
+    skip_name_resolve=on        #跳过主机名解析。在CentOS 6自带的mysql后面的=on不用写
+    innodb_file_per_table=on    #innodb的每个表是用单独的文件
+  slave.cnf: >
+    # Apply this config only on slaves.
+    [mysqld]
+    relay_log=relay-log        
+    #启用中继日志。在数据目录下有一个relay-kog.info里面保存了当前的中继日志和位置会主节点二进制文件的名字和位置。
+    read_only=on                #禁止用户写入数据，这一项的管理员和复制重放无效。       
+
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  labels:
+    v1alpha1.finupgroup.com/mariadbcluster: test1
+  name: test1
+  namespace: mysql-operator
+spec:
+  replicas: 1
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels:
+      v1alpha1.finupgroup.com/mariadbcluster: test1
+  serviceName: test1
+  template:
+    metadata:
+      labels:
+        v1alpha1.finupgroup.com/mariadbcluster: test1
+    spec:
+      containers:
+        - env:
+            - name: MYSQL_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  key: database-root-password
+                  name: mariadb-secret-test1
+            - name: MYSQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  key: database-password
+                  name: mariadb-secret-test1
+            - name: MYSQL_USER
+              valueFrom:
+                secretKeyRef:
+                  key: database-user
+                  name: mariadb-secret-test1
+            - name: MYSQL_DATABASE
+              value: paas
+          image: 'mariadb:10.1.34'
+          imagePullPolicy: IfNotPresent
+          livenessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - '-c'
+                - MYSQL_PWD="$MYSQL_ROOT_PASSWORD"
+                - mysql
+                - '-p$(MYSQL_ROOT_PASSWORD)'
+                - '-e'
+                - SELECT 1
+            failureThreshold: 3
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            successThreshold: 1
+            timeoutSeconds: 5
+          name: mariadb
+          readinessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - '-c'
+                - MYSQL_PWD="$MYSQL_ROOT_PASSWORD"
+                - mysqladmin
+                - ping
+          resources:
+            limits:
+              cpu: 2048m
+              memory: 2Gi
+            requests:
+              cpu: 512m
+              memory: 512Mi
+          volumeMounts:
+            - mountPath: /var/lib/mysql
+              name: mariadb-data
+              subPath: mysql
+            - mountPath: /etc/mysql/conf.d
+              name: conf
+        - command:
+            - bash
+            - '-c'
+            - |
+              set -ex
+              cd /var/lib/mysql
+              # Determine binlog position of cloned data, if any.
+              if [[ -f xtrabackup_slave_info ]]; then
+                # XtraBackup already generated a partial "CHANGE MASTER TO" query
+                # because we're cloning from an existing slave.
+                cp xtrabackup_slave_info change_master_to.sql.in
+                # Ignore xtrabackup_binlog_info in this case (it's useless).
+                # rm -f xtrabackup_binlog_info
+              elif [[ -f xtrabackup_binlog_info ]]; then
+                # We're cloning directly from master. Parse binlog position.
+                [[ `cat xtrabackup_binlog_info` =~ ^(.*?)[[:space:]]+(.*?)[[:space:]]+(.*?)$ ]] || exit 1
+                # rm xtrabackup_binlog_info
+                echo "CHANGE MASTER TO MASTER_LOG_FILE='${BASH_REMATCH[1]}',\
+                      MASTER_LOG_POS=${BASH_REMATCH[2]}" > change_master_to.sql.in
+              fi
+              # Check if we need to complete a clone by starting replication.
+              if [[ -f change_master_to.sql.in ]]; then
+                echo "Waiting for mysqld to be ready (accepting connections)"
+                until mysql -h 127.0.0.1 -p${MYSQL_ROOT_PASSWORD} -e "SELECT 1"; do sleep 1; done
+                echo "Initializing replication from clone position"
+                # In case of container restart, attempt this at-most-once.
+                mv change_master_to.sql.in change_master_to.sql.orig
+                mysql -h 127.0.0.1 -p${MYSQL_ROOT_PASSWORD} <<EOF
+              STOP SLAVE;
+              $(<change_master_to.sql.orig),
+                MASTER_HOST='test1-0.test1',
+                MASTER_USER='root',
+                MASTER_PASSWORD="${MYSQL_ROOT_PASSWORD}",
+                MASTER_CONNECT_RETRY=10;
+              START SLAVE;
+              EOF
+              fi
+              # Start a server to send backups when requested by peers.
+              exec ncat --listen --keep-open --send-only --max-conns=1 3307 -c \
+                "xtrabackup --backup --slave-info --stream=xbstream --host=127.0.0.1 --user=root --password=${MYSQL_ROOT_PASSWORD}"
+          env:
+            - name: MYSQL_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  key: database-root-password
+                  name: mariadb-secret-test1
+            - name: MYSQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  key: database-password
+                  name: mariadb-secret-test1
+            - name: MYSQL_USER
+              valueFrom:
+                secretKeyRef:
+                  key: database-user
+                  name: mariadb-secret-test1
+            - name: MYSQL_DATABASE
+              value: paas
+          image: 'xtrabackup:1.0'
+          imagePullPolicy: IfNotPresent
+          name: xtrabackup
+          resources:
+            requests:
+              cpu: 100m
+              memory: 100Mi
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+          volumeMounts:
+            - mountPath: /var/lib/mysql
+              name: mariadb-data
+              subPath: mysql
+            - mountPath: /etc/mysql/conf.d
+              name: conf
+      initContainers:
+        - command:
+            - bash
+            - '-c'
+            - |
+              set -ex
+              # Generate mysql server-id from pod ordinal index.
+              [[ `hostname` =~ -([0-9]+)$ ]] || exit 1
+              ordinal=${BASH_REMATCH[1]}
+              echo [mysqld] > /mnt/conf.d/server-id.cnf
+              # Add an offset to avoid reserved server-id=0 value.
+              echo server-id=$((100 + $ordinal)) >> /mnt/conf.d/server-id.cnf
+              # Copy appropriate conf.d files from config-map to emptyDir.
+              if [[ $ordinal -eq 0 ]]; then
+                cp /mnt/config-map/master.cnf /mnt/conf.d/
+              else
+                cp /mnt/config-map/slave.cnf /mnt/conf.d/
+              fi
+          env:
+            - name: MYSQL_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  key: database-root-password
+                  name: mariadb-secret-test1
+          image: 'mariadb:10.1.34'
+          imagePullPolicy: IfNotPresent
+          name: init-mysql
+          resources: {}
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+          volumeMounts:
+            - mountPath: mnt/conf.d
+              name: conf
+            - mountPath: /mnt/config-map
+              name: config-map
+        - command:
+            - bash
+            - '-c'
+            - >
+              set -ex
+
+              # Skip the clone if data already exists.
+
+              [[ -d /var/lib/mysql/mysql ]] && exit 0
+
+              # Skip the clone on master (ordinal index 0).
+
+              [[ `hostname` =~ -([0-9]+)$ ]] || exit 1
+
+              ordinal=${BASH_REMATCH[1]}
+
+              [[ $ordinal -eq 0 ]] && exit 0
+
+              # Clone data from previous peer.
+
+              ncat --recv-only test1-$(($ordinal-1)).test1 3307 | xbstream -x -C
+              /var/lib/mysql
+
+              # Prepare the backup.
+
+              xtrabackup --prepare --target-dir=/var/lib/mysql
+          env:
+            - name: MYSQL_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  key: database-root-password
+                  name: mariadb-secret-test1
+          image: 'xtrabackup:1.0'
+          imagePullPolicy: IfNotPresent
+          name: clone-mysql
+          volumeMounts:
+            - mountPath: /var/lib/mysql
+              name: mariadb-data
+              subPath: mysql
+            - mountPath: /etc/mysql/conf.d
+              name: conf
+      volumes:
+        - emptyDir: {}
+          name: conf
+        - configMap:
+            defaultMode: 420
+            name: mariadb-test1
+          name: config-map
+  volumeClaimTemplates:
+    - metadata:
+        name: mariadb-data
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 50Gi
+        storageClassName: standard

@@ -1,0 +1,137 @@
+# Headless service for stable DNS entries of StatefulSet members.
+apiVersion: v1
+kind: Service
+metadata:
+  name: mongo
+  labels:
+    app: mongo
+spec:
+  ports:
+  - name: mongo
+    port: 27017
+  clusterIP: None
+  selector:
+    app: mongo
+---
+# Client service for connecting to any MySQL instance for reads.
+# For writes, you must instead connect to the master: mysql-0.mysql.
+apiVersion: v1
+kind: Service
+metadata:
+  name: mongo-read
+  labels:
+    app: mongo
+spec:
+  ports:
+  - name: mongo
+    port: 27017
+  selector:
+    app: mongo
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  labels:
+    app: mongo
+  name: mongo
+data:
+  mongo.conf: |
+    # Apply this config only on the master.
+    # mongod.conf
+
+    # for documentation of all options, see:
+    #   http://docs.mongodb.org/manual/reference/configuration-options/
+    
+    # Where and how to store data.
+    storage:
+      dbPath: /data/db
+      journal:
+        enabled: true
+    #  engine:
+    #  mmapv1:
+    #  wiredTiger:
+    
+    # where to write logging data.
+    # systemLog:
+    #   destination: file
+    #   logAppend: true
+    #   path: /var/log/mongodb/mongod.log
+    
+    # network interfaces
+    net:
+      port: 27017
+      bindIp: 127.0.0.1
+    
+    
+    # how the process runs
+    processManagement:
+      timeZoneInfo: /usr/share/zoneinfo
+    
+    #security:
+    
+    #operationProfiling:
+    
+    #replication:
+    
+    #sharding:
+    
+    ## Enterprise-Only Options:
+    
+    #auditLog:
+    
+    #snmp:
+
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata: 
+  labels: 
+    v1alpha1.finupgroup.com/mongo: mongo
+  name: mongo
+spec:
+  replica: 1
+  reviosnHistoryLimit: 10
+  selector: 
+    matchLabels:
+      v1alpha1.finupgroup.com/mongo: mongo
+  serviceName: mongo  
+  template:
+    metadata:
+      labels:
+        v1alpha1.finupgroup.com/mongo: mongo
+        app: mongo
+    spec:
+      containers:
+      - name: mongo
+        image: mongo:3.6
+        imagePullPolicy: Always
+        resources:
+          limits:
+            cpu: 512m
+            memory: 512Mi
+          requests:
+            cpu: 512m
+            memory: 512Mi
+        volumeMounts:
+          - mountPath: /data/db
+            name: data
+          - mountPath: /etc/mongo.conf
+            name: mongo
+            subPath: mongo.conf
+      initContainers:
+      volumes:
+      - configMap:
+          defaultMode: 420
+          name: mongo
+        name: mongo
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec: 
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 10Gi
+        storageClassName: standard
