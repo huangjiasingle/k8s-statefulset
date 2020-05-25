@@ -1,1 +1,1 @@
-常用中间件的statefulset实现
+常用中间件的statefulset实现, 包括etcd，mariadb，mysql，mongo，kafka，rabbitmq等

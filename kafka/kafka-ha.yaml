@@ -1,0 +1,379 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  labels:
+    app.kubernetes.io/name: kafka
+    app.kubernetes.io/instance: kafka-demo
+    app.kubernetes.io/version: 1.1.1
+  name: kafka-config
+  namespace: default
+data:
+  init.sh: |-
+    #!/bin/bash
+    set -x
+
+    cp /etc/kafka-configmap/log4j.properties /etc/kafka/
+
+    KAFKA_BROKER_ID=${HOSTNAME##*-}
+
+    ZOOKEEPER=${ZOOKEEPER}
+    PARTITION_NUM =${PARTITION_NUM}
+
+    # to dynamic set kafka server broker id
+    sed "s/#init#broker.id=#init#/broker.id=$KAFKA_BROKER_ID/" /etc/kafka-configmap/server.properties > /etc/kafka/server.properties.tmp
+
+    # to dynamic set kafka server zookeeper connect info
+    sed -i "s/#init#zookeeper.connect=#init#/zookeeper.connect=$ZOOKEEPER/" /etc/kafka/server.properties.tmp
+
+    # to dynamic set kafka server partitions num
+    sed -i "s/#init#num.partitions=#init#/zookeeper.connect=$PARTITION_NUM/" /etc/kafka/server.properties.tmp
+
+    [ $? -eq 0 ] && mv /etc/kafka/server.properties.tmp /etc/kafka/server.properties
+  log4j.properties: |-
+    log4j.rootLogger=INFO, stdout, kafkaAppender
+
+    log4j.appender.stdout=org.apache.log4j.ConsoleAppender
+    log4j.appender.stdout.layout=org.apache.log4j.PatternLayout
+    log4j.appender.stdout.layout.ConversionPattern=[%d] %p %m (%c)%n
+
+    log4j.appender.kafkaAppender=org.apache.log4j.DailyRollingFileAppender
+    log4j.appender.kafkaAppender.DatePattern='.'yyyy-MM-dd-HH
+    log4j.appender.kafkaAppender.File=${kafka.logs.dir}/server.log
+    log4j.appender.kafkaAppender.layout=org.apache.log4j.PatternLayout
+    log4j.appender.kafkaAppender.layout.ConversionPattern=[%d] %p %m (%c)%n
+
+    log4j.appender.stateChangeAppender=org.apache.log4j.DailyRollingFileAppender
+    log4j.appender.stateChangeAppender.DatePattern='.'yyyy-MM-dd-HH
+    log4j.appender.stateChangeAppender.File=${kafka.logs.dir}/state-change.log
+    log4j.appender.stateChangeAppender.layout=org.apache.log4j.PatternLayout
+    log4j.appender.stateChangeAppender.layout.ConversionPattern=[%d] %p %m (%c)%n
+
+    log4j.appender.requestAppender=org.apache.log4j.DailyRollingFileAppender
+    log4j.appender.requestAppender.DatePattern='.'yyyy-MM-dd-HH
+    log4j.appender.requestAppender.File=${kafka.logs.dir}/kafka-request.log
+    log4j.appender.requestAppender.layout=org.apache.log4j.PatternLayout
+    log4j.appender.requestAppender.layout.ConversionPattern=[%d] %p %m (%c)%n
+
+    log4j.appender.cleanerAppender=org.apache.log4j.DailyRollingFileAppender
+    log4j.appender.cleanerAppender.DatePattern='.'yyyy-MM-dd-HH
+    log4j.appender.cleanerAppender.File=${kafka.logs.dir}/log-cleaner.log
+    log4j.appender.cleanerAppender.layout=org.apache.log4j.PatternLayout
+    log4j.appender.cleanerAppender.layout.ConversionPattern=[%d] %p %m (%c)%n
+
+    log4j.appender.controllerAppender=org.apache.log4j.DailyRollingFileAppender
+    log4j.appender.controllerAppender.DatePattern='.'yyyy-MM-dd-HH
+    log4j.appender.controllerAppender.File=${kafka.logs.dir}/controller.log
+    log4j.appender.controllerAppender.layout=org.apache.log4j.PatternLayout
+    log4j.appender.controllerAppender.layout.ConversionPattern=[%d] %p %m (%c)%n
+
+    log4j.appender.authorizerAppender=org.apache.log4j.DailyRollingFileAppender
+    log4j.appender.authorizerAppender.DatePattern='.'yyyy-MM-dd-HH
+    log4j.appender.authorizerAppender.File=${kafka.logs.dir}/kafka-authorizer.log
+    log4j.appender.authorizerAppender.layout=org.apache.log4j.PatternLayout
+    log4j.appender.authorizerAppender.layout.ConversionPattern=[%d] %p %m (%c)%n
+
+    # Turn on all our debugging info
+    #log4j.logger.kafka.producer.async.DefaultEventHandler=DEBUG, kafkaAppender
+    #log4j.logger.kafka.client.ClientUtils=DEBUG, kafkaAppender
+    #log4j.logger.kafka.perf=DEBUG, kafkaAppender
+    #log4j.logger.kafka.perf.ProducerPerformance$ProducerThread=DEBUG, kafkaAppender
+    #log4j.logger.org.I0Itec.zkclient.ZkClient=DEBUG
+    log4j.logger.kafka=INFO, kafkaAppender
+
+    log4j.logger.kafka.network.RequestChannel$=WARN, requestAppender
+    log4j.additivity.kafka.network.RequestChannel$=false
+
+    #log4j.logger.kafka.network.Processor=INFO, requestAppender
+    #log4j.logger.kafka.server.KafkaApis=INFO, requestAppender
+    #log4j.additivity.kafka.server.KafkaApis=false
+    log4j.logger.kafka.request.logger=WARN, requestAppender
+    log4j.additivity.kafka.request.logger=false
+
+    log4j.logger.kafka.controller=INFO, controllerAppender
+    log4j.additivity.kafka.controller=false
+
+    log4j.logger.kafka.log.LogCleaner=INFO, cleanerAppender
+    log4j.additivity.kafka.log.LogCleaner=false
+
+    log4j.logger.state.change.logger=INFO, stateChangeAppender
+    log4j.additivity.state.change.logger=false
+
+    #Change this to debug to get the actual audit log for authorizer.
+    log4j.logger.kafka.authorizer.logger=WARN, authorizerAppender
+    log4j.additivity.kafka.authorizer.logger=false
+  server.properties: |-
+    ############################# Socket Server Settings #############################
+
+    # The id of the broker. This must be set to a unique integer for each broker.
+    #init#broker.id=#init#
+
+    #init#broker.rack=#init#
+
+    listeners=PLAINTEXT://0.0.0.0:9092
+
+    # The port the socket server listens on
+    #port=9092
+
+    # Hostname the broker will bind to. If not set, the server will bind to all interfaces
+    #host.name=localhost
+
+    # Hostname the broker will advertise to producers and consumers. If not set, it uses the
+    # value for "host.name" if configured.  Otherwise, it will use the value returned from
+    # java.net.InetAddress.getCanonicalHostName().
+    #advertised.host.name=<hostname routable by clients>
+
+    # The port to publish to ZooKeeper for clients to use. If this is not set,
+    # it will publish the same port that the broker binds to.
+    #advertised.port=<port accessible by clients>
+
+    # The number of threads handling network requests
+    num.network.threads=3
+
+    # The number of threads doing disk I/O
+    num.io.threads=8
+
+    # The send buffer (SO_SNDBUF) used by the socket server
+    socket.send.buffer.bytes=102400
+
+    # The receive buffer (SO_RCVBUF) used by the socket server
+    socket.receive.buffer.bytes=102400
+
+    # The maximum size of a request that the socket server will accept (protection against OOM)
+    socket.request.max.bytes=104857600
+
+    ############################# Log Basics #############################
+
+    # A comma seperated list of directories under which to store log files
+    log.dirs=/var/lib/kafka/data/topics
+
+    # The default number of log partitions per topic. More partitions allow greater
+    # parallelism for consumption, but this will also result in more files across
+    # the brokers.
+    # num.partitions=1
+    #init#num.partitions=#init#
+
+    default.replication.factor=3
+
+    min.insync.replicas=2
+
+    auto.create.topics.enable=true
+
+    # The number of threads per data directory to be used for log recovery at startup and flushing at shutdown.
+    # This value is recommended to be increased for installations with data dirs located in RAID array.
+    num.recovery.threads.per.data.dir=8
+
+    ############################# Log Flush Policy #############################
+
+    # Messages are immediately written to the filesystem but by default we only fsync() to sync
+    # the OS cache lazily. The following configurations control the flush of data to disk.
+    # There are a few important trade-offs here:
+    #    1. Durability: Unflushed data may be lost if you are not using replication.
+    #    2. Latency: Very large flush intervals may lead to latency spikes when the flush does occur as there will be a lot of data to flush.
+    #    3. Throughput: The flush is generally the most expensive operation, and a small flush interval may lead to excessive seeks.
+    # The settings below allow one to configure the flush policy to flush data after a period of time or
+    # every N messages (or both). This can be done globally and overridden on a per-topic basis.
+
+    # The number of messages to accept before forcing a flush of data to disk
+    #log.flush.interval.messages=10000
+
+    # The maximum amount of time a message can sit in a log before we force a flush
+    #log.flush.interval.ms=1000
+
+    ############################# Log Retention Policy #############################
+
+    # The following configurations control the disposal of log segments. The policy can
+    # be set to delete segments after a period of time, or after a given size has accumulated.
+    # A segment will be deleted whenever *either* of these criteria are met. Deletion always happens
+    # from the end of the log.
+
+    # The minimum age of a log file to be eligible for deletion
+    log.retention.hours=168
+
+    # A size-based retention policy for logs. Segments are pruned from the log unless the remaining
+    # segments drop below log.retention.bytes. Functions independently of log.retention.hours.
+    #log.retention.bytes=1073741824
+
+    # The maximum size of a log segment file. When this size is reached a new log segment will be created.
+    log.segment.bytes=1073741824
+
+    # The interval at which log segments are checked to see if they can be deleted according
+    # to the retention policies
+    log.retention.check.interval.ms=300000
+
+    ############################# Zookeeper #############################
+
+    # Zookeeper connection string (see zookeeper docs for details).
+    # This is a comma separated host:port pairs, each corresponding to a zk
+    # server. e.g. "127.0.0.1:3000,127.0.0.1:3001,127.0.0.1:3002".
+    # You can also append an optional chroot string to the urls to specify the
+    # root directory for all kafka znodes.
+    #init#zookeeper.connect=#init#
+
+    # Zookeeper open acl in root path, we need set this vaule to true.
+    # zookeeper.set.acl=true
+
+    # Timeout in ms for connecting to zookeeper
+    #zookeeper.connection.timeout.ms=6000
+
+
+    ############################# Group Coordinator Settings #############################
+
+    # The following configuration specifies the time, in milliseconds, that the GroupCoordinator will delay the initial consumer rebalance.
+    # The rebalance will be further delayed by the value of group.initial.rebalance.delay.ms as new members join the group, up to a maximum of max.poll.interval.ms.
+    # The default value for this is 3 seconds.
+    # We override this to 0 here as it makes for a better out-of-the-box experience for development and testing.
+    # However, in production environments the default value of 3 seconds is more suitable as this will help to avoid unnecessary, and potentially expensive, rebalances during application startup.
+    #group.initial.rebalance.delay.ms=0
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app.kubernetes.io/name: kafka
+    app.kubernetes.io/instance: kafka-demo
+    app.kubernetes.io/version: 1.1.1
+  name: kafka-demo
+  namespace: default
+spec:
+  clusterIP: None
+  ports:
+  - name: inside
+    port: 9092
+    protocol: TCP
+    targetPort: 9092
+  selector:
+    app.kubernetes.io/instance: kafka-demo
+    app.kubernetes.io/version: 1.1.1
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  labels:
+    app.kubernetes.io/name: kafka
+    app.kubernetes.io/instance: kafka-demo
+    app.kubernetes.io/version: 1.1.1
+  name: kafka-demo
+  namespace: default
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: kafka-demo
+      app.kubernetes.io/version: 1.1.1
+  serviceName: kafka-demo
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/instance: kafka-demo
+        app.kubernetes.io/version: 1.1.1
+    spec:
+      containers:
+      - command:
+        - kafka-server-start.sh
+        - /etc/kafka/server.properties
+        env:
+        - name: KAFKA_LOG4J_OPTS
+          value: -Dlog4j.configuration=file:/etc/kafka/log4j.properties
+        - name: JMX_PORT
+          value: "5555"
+        - name: KAFKA_HEAP_OPTS
+          value: -Xmx4800M -Xms4800M
+        image: huangjia/kafka:2.11-1.1.1
+        imagePullPolicy: IfNotPresent
+        name: kafka
+        ports:
+        - containerPort: 5555
+          name: jmx
+          protocol: TCP
+        - containerPort: 9092
+          name: broker
+          protocol: TCP
+        readinessProbe:
+          failureThreshold: 3
+          periodSeconds: 10
+          successThreshold: 1
+          tcpSocket:
+            port: 9092
+          timeoutSeconds: 1
+        resources:
+          limits:
+            cpu: "3"
+            memory: 6G
+          requests:
+            cpu: "3"
+            memory: 6G
+        securityContext:
+          privileged: true
+        volumeMounts:
+        - mountPath: /etc/kafka
+          name: config
+        - mountPath: /var/lib/kafka/data
+          name: data
+      initContainers:
+      - command:
+        - /bin/bash
+        - /etc/kafka-configmap/init.sh
+        env:
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: spec.nodeName
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.name
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.namespace
+        - name: PARTITION_NUM
+          value: "1"
+        # zk地址，自行替换
+        - name: ZOOKEEPER
+          value: localhost:2182
+        image: huangjia/kafka:2.11-1.1.1
+        imagePullPolicy: IfNotPresent
+        name: init-config
+        resources:
+          limits:
+            cpu: "3"
+            memory: 6G
+          requests:
+            cpu: "3"
+            memory: 6G
+        securityContext:
+          privileged: true
+        volumeMounts:
+        - mountPath: /etc/kafka-configmap
+          name: configmap
+        - mountPath: /etc/kafka
+          name: config
+      restartPolicy: Always
+      volumes:
+      - configMap:
+          defaultMode: 420
+          name: kafka-config
+        name: configmap
+      - emptyDir: {}
+        name: config
+      # 自行使用pvc替换
+      - emptyDir: {}
+        name: data
+  # volumeClaimTemplates:
+  # - metadata:
+  #     labels:
+  #       app.kubernetes.io/name: rabbitmq
+  #       app.kubernetes.io/instance: rabbitmq-demo
+  #       app.kubernetes.io/version: 3.6.9
+  #     name: data
+  #   spec:
+  #     accessModes:
+  #     - ReadWriteOnce
+  #     resources:
+  #       requests:
+  #         storage: 10G
+  #     storageClassName: ceph
